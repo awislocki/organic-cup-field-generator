@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.blend
+*.blend1
+*.stl
+*.3mf
+*.gcode
+*.csv
+.DS_Store
+Thumbs.db

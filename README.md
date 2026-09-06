@@ -15,9 +15,11 @@ finished work instead of restarting them at every panel boundary.
 - Dense collision-aware packing with hero, medium, and filler forms
 - Global wave, noise, clustering, curl-flow, and downward-current fields
 - One-pass generation of an entire multi-panel artwork
-- Numbered individual pieces with small flat glue feet
+- Numbered individual pieces with integral flat glue feet and connected geometry
 - Assembly-region collections and non-rendering viewport guides
-- CSV placement map containing position, rotation, height, size, and color group
+- Numbered full-scale SVG mounting maps, region sheets and CSV coordinates
+- Individual STL files plus automatically spaced print plates and plate ID diagrams
+- One-click full-artwork studio render, with straight-on and angled camera views
 - Optional shared backing panels, rounded blocks, and mixed geometry
 - Optional voxel-remeshed manifold output
 - A1 Mini planning with a default 175 × 175 mm safe working footprint
@@ -32,16 +34,20 @@ finished work instead of restarting them at every panel boundary.
 6. Enter the complete assembled width and height under **Finished Work / A1 Mini**.
 7. Click **Generate Finished Work**.
 8. Inspect the complete artwork and regenerate with a new seed if desired.
-9. Save the generated assembly map with **Save Assembly Map CSV**.
+9. Use **Render All Panels** to inspect the composition.
+10. Use **Export Print & Assembly Package** to save STLs, print plates and maps.
 
-The assembly-region collections are organizational zones, not automatically
-nested slicer plates. Export manageable groups of pieces and let Bambu Studio
-arrange them on the A1 Mini bed.
+Assembly-region collections organize mounting. The export package separately
+arranges print plates within the usable A1 Mini footprint, preserving each
+piece's orientation and adding adjustable spacing.
+
+![Actual generated geometry in the automatic studio view](docs/modular_coral_preview.png)
 
 ## Documentation
 
 - [Complete install, control, generation, assembly, and printing guide](README_organic_cup_field_generator.md)
 - [Development journey and design rationale](DEVELOPMENT_JOURNEY.md)
+- [Version history and regression checks](CHANGELOG.md)
 
 ## Reference boundary
 
@@ -59,4 +65,8 @@ form is produced procedurally by this add-on.
 
 ## Current version
 
-Version 1.7.0
+Version 1.8.0
+
+Run the regression test in Blender:
+
+    blender --background --factory-startup --python-exit-code 1 --python tests/test_blender.py

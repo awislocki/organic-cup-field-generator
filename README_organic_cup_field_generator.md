@@ -1,234 +1,195 @@
-# Organic Cup Field Generator
+# Organic Cup Field Generator — guide
 
-`organic_cup_field_generator.py` is a Blender 4.x add-on for dense wall-relief
-fields of smooth hollow calla/tulip-like cups. The reference-style defaults favor
-thin continuous rims, rounded-triangular and teardrop mouths, large-to-small
-clusters, coordinated swirls, and broad height relief with flowing depressions.
-Version 1.7 adds a modular coral workflow inspired by the construction logic of
-large assembled wall-art systems: the complete composition is packed once, then
-its separate glue-down pieces are numbered and assigned to assembly regions.
-Each organic form remains an original asymmetric funnel with a broad mouth and
-curved cavity tapering toward a small, off-centre dark throat.
-
-The modular organization takes visual and workflow cues from Paragami's Coral
-Sponge examples and numbered-layout assembly method. It does not include, trace,
-or reproduce Paragami model files or proprietary block geometry.
-
-The add-on can generate one test tile, a manually sized panel grid, or a complete
-numbered modular artwork for an exact finished size. Shared-base panels remain
-separate objects; modular cups remain separate objects inside region collections.
+Version 1.8.0 · Blender 4.x · numeric dimensions in millimetres
 
 ## Install or update
 
-1. In Blender 4.x, open **Edit → Preferences → Add-ons**.
-2. Use the upper-right add-on menu and choose **Install from Disk**.
-3. Select `organic_cup_field_generator.py` and enable **Organic Cup Field
-   Generator**. When replacing an earlier version, disable it first and restart
-   Blender after installing the new file.
-4. In the 3D View, press **N** and open the **Organic Cups** tab.
-5. Choose a **Style Preset** and click **Apply Selected Preset** before
-   regenerating. This is especially important in an existing `.blend`: Blender
-   preserves old scene values when an add-on is updated.
+1. Download organic_cup_field_generator.py.
+2. Open Blender Preferences → Add-ons → Install from Disk. In earlier Blender
+   4.x versions the button is simply **Install**.
+3. Install the file and enable **Organic Cup Field Generator**. Disable an older
+   copy first, and restart Blender after replacing it.
+4. Open the 3D View sidebar with **N**, then choose **Organic Cups**.
+5. In an existing saved scene, choose **Modular Coral (Recommended)** and click
+   **Apply Selected Preset**. Updating the add-on retains old scene values.
 
-## Included style presets
+A fresh scene starts with consistent Modular Coral settings. Applying a preset
+preserves artwork dimensions and seed, resets manual tiles to 175 × 175 mm, and
+turns voxel remeshing off for the design pass.
 
-- **Modular Coral (Recommended)** is the primary no-backing workflow. It creates
-  a lower-density family of larger coral/tulip funnels, solves the entire artwork
-  as one field, gives each piece a glue foot, and produces a numbered assembly
-  map. This is the closest construction method to the Paragami Coral Sponge
-  reference while using newly generated geometry.
-- **Dense Cellular Panel** is the closest shared-base match to the large
-  wall panels: low relief, nearly complete coverage, many fillers, restrained
-  lean, and small off-centre throats.
-- **Balanced Funnels** keeps more height and a broad general-purpose mixture of
-  hero, medium, and small forms.
-- **Deep Hero Funnels** uses fewer cups, a larger hero tier, smaller throats, and
-  deeper cavities like the close reference view.
-- **Strong Undercurrent** emphasizes directional lean, curling streamlines, and
-  deeper trough channels across the global wave.
-- **Glue-Down Funnels** removes the shared backing and gives every funnel a
-  closed, flat mounting foot for printing as separate pieces and gluing to a
-  wood, acrylic, metal, or printed panel.
-- **Funnels + Blocks** mixes asymmetric hollow funnels with solid rounded-square
-  columns while preserving the global height field.
-- **Rounded Block Field** creates only solid rounded-square columns with
-  clustered widths, rotations, and varying wave-driven heights.
+## Generate the full artwork
 
-Applying any preset preserves the finished artwork dimensions and random seed,
-but resets manual tile dimensions to `175 × 175 mm`. This is exactly 5 mm smaller
-than the A1 Mini's nominal 180 mm XY bed.
+1. Set **Finished Width** and **Finished Height** to the assembled artwork size.
+   The default 600 × 1200 mm is an example, not a printer-bed dimension.
+2. Keep **Numbered Glue-Down Pieces** and **Individual Glue Feet** selected.
+3. Click **Generate Finished Work**, then **Frame All Panels**.
 
-## Mounting and form modes
+The master field is solved over the exact dimensions before assignment to assembly
+regions. A rim may cross a region boundary; its root centre determines the owning
+region. Join/align backing sections before installing pieces spanning their seam.
 
-**Mounting Mode** is independent of the selected look:
+A 180 × 180 mm bed minus 2.5 mm per side gives a usable 175 × 175 mm footprint.
+The default artwork has 4 × 7 assembly regions, each 150 × 171.43 mm. Regions
+organize mounting; print plates are packed separately at export.
 
-- **Common Panel** creates the original closed rectangular backing.
-- **Individual Glue Feet** omits that backing. Every funnel or block receives a
-  small closed pad at Z = 0. **Glue Foot Thickness** controls pad thickness and
-  **Glue Foot Flange** controls extra bonding area around the attachment root.
+The default seed produced 674 pieces and 36 print plates at 3 mm spacing during
+regression testing. Counts vary with seed and settings. Limits of 1,500 primary
+pieces, 2,200 estimated total pieces and 8 million source vertices prevent
+unbounded generation.
 
-**Form Type** can be **Organic Funnels**, **Funnels + Blocks**, or **Rounded
-Blocks**. In mixed mode, **Block Fraction** controls the ratio. **Block Bevel**
-rounds the vertical and top edges. Blocks are solid, closed forms suitable for
-straightforward FDM printing.
+Modular regeneration is staged: a failed attempt leaves the previous successful
+artwork and placement data intact. Correct the setting reported by Blender and
+regenerate.
 
-## Generate the complete artwork
+## View and render every panel
 
-1. Stay in **Object Mode**.
-2. Under **Finished Work / A1 Mini**, enter the exact assembled width and height.
-   The included `600 × 1200 mm` values are only an editable starting example.
-3. Keep the A1 Mini bed at `180 × 180 × 180 mm`. The default 2.5 mm margin per
-   side gives a practical maximum panel footprint of `175 × 175 mm`. Manual tile
-   defaults and all included presets use the same 175 mm footprint.
-4. Read the live plan shown in the sidebar. For the starting example it reports
-   `4 × 7 = 28` equal panels, each `150 × 171.43 mm`.
-5. For the modular method, choose **Numbered Glue-Down Pieces** and
-   **Individual Glue Feet**. Leave **Voxel Merge / Manifold Output** off for the
-   first design pass, then click **Generate Finished Work**.
-6. Blender creates one master composition, panel-region collections and outline
-   guides, separate objects named `P01-001`, `P01-002`, and so on, and a Text
-   Editor data block named `OCF_Assembly_Map.csv`.
-7. Inspect the complete assembled view. Adjust the field and regenerate until
-   the composition is right. Panel boundaries do not influence packing or the
-   height field.
-8. Use **Save Assembly Map CSV** to save piece ID, assembly region, local and
-   artwork coordinates, rotation, height, mouth diameter, form type, and one of
-   five optional colour groups.
-9. Enable **Voxel Merge / Manifold Output** only for the production pass if your
-   slicer does not reliably unite the overlapping foot and cup shells. In the
-   numbered workflow each piece is remeshed independently.
+The **View & Render** box is at the top of the sidebar.
 
-The automatic planner uses equal assembly-region dimensions, so it never creates
-one narrow remainder strip. It also optionally scales the main wavelength to the
-full artwork instead of restarting a small wave on every panel.
+- **Frame All Panels** selects and frames the active generated artwork.
+- **Straight On** looks directly into the openings.
+- **Angled Relief** reveals the height wave and interiors.
+- **Image Long Edge** sets image resolution.
+- **Render All Panels** automatically fits every piece and opens a studio render.
+  Save it with **Render Result → Image → Save As**.
 
-## Modular assembly workflow
+A separate **OCF Artwork Preview** scene uses Blender's Workbench studio renderer
+and includes only generated meshes. Guides and unrelated objects are excluded;
+the original scene's camera, lights and renderer are retained. This design preview
+does not simulate filament or layer lines.
 
-The recommended workflow is meant for cups glued to a separate wood, acrylic,
-metal, foam, or printed backboard:
+If the render window does not open, switch an editor to **Image Editor** and select
+**Render Result**. To customize the camera or renderer, switch to the preview scene
+in Blender's scene selector. The add-on render button restores its studio setup
+each time it is used.
 
-1. Apply **Modular Coral (Recommended)**.
-2. Enter the full finished width and height—not the printer-bed size.
-3. Generate the finished work. The master packing solution is calculated over
-   the complete dimensions before A1 Mini-sized assembly regions are assigned.
-4. Use the viewport outline empties and the CSV map to mark the same grid on the
-   backing. A cup whose rim crosses a grid line stays whole; its glue-foot centre
-   determines which region owns it.
-5. Print pieces in manageable slicer plates. The assembly-region collections are
-   an organizational map, not pre-nested build plates; let Bambu Studio arrange
-   selected pieces inside the 180 × 180 mm bed.
-6. Dry-fit a region before gluing. Install seam-crossing pieces after adjoining
-   backing sections are in their final aligned position.
+## Export a print and assembly package
 
-The optional colour group is derived from the same continuous cluster and height
-fields. It can be ignored for a single-colour artwork or used to organize up to
-five filament colours without changing the composition.
+1. Finalize and inspect the composition.
+2. Set **Print Spacing**; default 3 mm between complete XY bounding boxes.
+3. Choose **Export Print & Assembly Package** and select a destination.
+4. A new uniquely named folder is created for every export.
 
-## Reference-style controls
+| File/folder | Purpose |
+| --- | --- |
+| pieces/P01-001.stl | One named connected part per file, useful for reprints |
+| plates/plate_001.stl | Separated parts arranged within the usable print bed |
+| plates/plate_001.svg | Piece-ID diagram for labeling that plate after printing |
+| assembly.svg | Full-size numbered artwork map |
+| regions/P01.svg | Full-size placement map for one assembly region |
+| assembly.csv | IDs, position, rotation, height, size and colour group |
+| manifest.json | Settings, contours, actual bounds and plate assignments |
+| PRINT_ME_FIRST.md | Instructions for this job |
 
-- **Density** is the primary cup count per 100 × 100 mm. The shared-panel presets
-  use higher density; Modular Coral uses fewer, larger forms plus a smaller
-  secondary tier from **Gap Fillers**.
-- **Gap Fillers** place a second tier of small cups into the largest remaining
-  voids, producing the tightly nested large/medium/tiny hierarchy in the photos.
-  They are skipped automatically when a remaining void cannot hold a printable
-  cup, rather than being forced into an intersection.
-- **Hero Cup Fraction** promotes a controlled portion of primary cups into a
-  distinctly larger tier. This creates focal funnels surrounded by cascades of
-  medium and tiny cups instead of a field of similarly sized openings.
-- **Packing Tightness** grows mouths toward weighted neighbor boundaries while
-  retaining a very small printable seam between forms.
-- **Minimum/Maximum Scale** provide the broad small-to-large size range visible in
-  the references. **Cluster Strength/Scale** gather related sizes into pools and
-  ribbons instead of distributing them independently.
-- **Mouth Shape Variation** produces smooth amoeba and teardrop irregularity.
-  **Mouth Elongation** ranges from near-round openings to long oval/calla forms.
-- **Throat Size** controls the small cavity floor. **Throat Offset** moves that
-  floor toward the narrow end of the teardrop, producing the asymmetric horn
-  interiors and dark off-centre focal points visible in the references.
-- **Tulip Form** creates a narrow root, softly swollen belly, slight upper neck,
-  and flared opening. **Rim Scallop** defaults near zero because the reference
-  rims are smooth and continuous; raise it only if visible lobes are wanted.
-- **Height / Radius Limit** prevents tiny gap-fillers from becoming long stalks.
-  Small cups stay shallow, medium cups form the cellular texture, and only broad
-  cups can rise into the wave crests. Increase it only for a taller tube field.
-- **Maximum Lean**, **Bend Variation**, and **Crest Size Correlation** coordinate
-  low, strongly swept cups with the undercurrent and larger cups with the crests.
-- **Flow Alignment**, **Flow Swirl**, and **Flow Scale** align mouth axes, lean,
-  and primary bend to a continuous curl field. This creates the fans, ribbons,
-  and vortices seen in the reference rather than unrelated random rotations.
-- **Wave Amplitude/Wavelength/Direction** define the broad relief across the whole
-  assembly. **Broad Wave Cycles** is used when automatic artwork fitting is on.
-- **Undercurrent Depth/Scale/Direction** add warped channels that only push cup
-  groups downward. Height noise adds restrained secondary variation.
+Packing uses conservative rectangular bounds and preserves orientation. It does
+not guarantee the minimum possible plate count. Different assembly regions may
+share a print plate.
 
-Packing uses point relaxation, collision-aware radius reduction, and weighted
-neighborhood-cell clipping at every wall ring. Lean and bend are constrained to
-the same cells. This substantially reduces intersections while allowing adjacent
-mouths to mold around one another. The reference preset also flares the bodies
-earlier and biases each belly toward its flow direction, hiding the attachment
-roots and avoiding the look of vertically extruded, diagonally cut pipes.
+Import one plate STL at a time into Bambu Studio and keep its parts together and
+their relative positions unchanged. Each cup has one connected foot-and-body
+surface and starts at Z = 0. IDs are filenames and map labels, not engravings:
+label the pieces as they come off the bed.
 
-## Panel continuity and seams
+The writer outputs numeric millimetres directly without an STL extension. Verify
+dimensions in the slicer. Added brims are not included in spacing allowances;
+increase spacing or reduce brim width where necessary.
 
-Wave, height noise, undercurrent, clustering, and orientation flow are evaluated
-in global millimeter coordinates. **Generate Finished Work** and **Generate Panel
-Set** therefore preserve one continuous field across every panel coordinate.
+The package uses saved generation data. Changing controls without regenerating
+does not change its map. Editing a generated mesh, transform, parent or modifier
+causes package export to request regeneration, keeping the parts synchronized with
+their placement data.
 
-In **Panel Meshes** mode, each physical tile still owns its cups and backing plate;
-cups stop at its edge clearance. In **Numbered Glue-Down Pieces** mode, the full
-artwork is packed first and the region grid is applied afterward. Rims can cross a
-region boundary without clipping, so the wave and cellular packing have no
-rectangular restart. This assumes the separate backing sections are aligned before
-those seam-crossing pieces are glued down.
+**Save Assembly Map CSV** exports just the coordinate table.
 
-The **Manual Panel Set** section remains available for testing specific tile
-coordinates. **Generate Field** replaces one coordinate; **Generate Panel Set**
-creates the requested manual X-by-Y grid. **Generate Finished Work** calculates
-those values automatically from the artwork and printer dimensions. Generated
-object names include their X/Y panel coordinates, and finished-work objects also
-store the effective panel grid and wave settings as custom properties.
+## Mounting maps
 
-## A1 Mini and FDM notes
+SVG files specify physical millimetre dimensions. Print at **100% / actual size**,
+then measure the included **20 mm ruler**. Do not use fit-to-page. Use a vector
+editor to tile or convert a master SVG larger than your paper. Region maps are
+usually small enough for an ordinary page.
 
-- The A1 Mini build volume is 180 × 180 × 180 mm and its included nozzle is
-  0.4 mm. The planner defaults to smaller 175 mm maximum panels to leave room for
-  dimensional error and slicer behavior.
-- Print shared-base panels flat-base-down with openings upward. For modular mode,
-  print individual pieces foot-down. Verify dimensions in Bambu Studio.
-- In **Numbered Glue-Down Pieces**, every cup is its own named Blender object.
-  Export a manageable selection at a time and use the slicer's arrangement tool;
-  do not attempt to print the entire assembled XY layout on one plate.
-- Piece IDs restart inside each assembly region, and the CSV preserves exact
-  placement and rotation. Marking the grid and piece IDs lightly on the backing
-  greatly reduces assembly errors.
-- The dark throat is a closed cavity floor, not a through-hole in the backing.
-  Increasing **Throat Size** makes the deepest region easier to resolve with a
-  large nozzle; decreasing it creates a sharper visual funnel.
-- The 0.8 mm reference-style wall targets two 0.4 mm lines and produces a thin
-  rim. If the slicer gives an inconsistent wall path, increase it to 1.0–1.2 mm
-  or tune line width/wall loops.
-- The 2.0 mm base is a practical starting point. Large finished works may benefit
-  from ribs or a separate mounting frame after small-panel testing.
-- Strong tilt and deep cups may create unsupported inner-wall regions. Inspect the
-  layer preview and reduce lean/bend if support would be trapped inside a cavity.
-- Preview output contains individually closed cup shells intersecting a closed
-  base. Use **Manifold Output** for final production so Blender voxel-unions those
-  roots and the backing plate.
-- Start voxel size near half the wall thickness. Smaller values preserve thin
-  rims but require more memory; larger values are faster and soften detail.
-- Generate a full preview set before manifold output. Voxel-remeshing dozens of
-  panels can take several minutes even though panels are processed separately.
-- The dense preset can approach ten thousand cups on a large artwork. For quick
-  composition drafts, lower **Density**, **Gap Fillers**, or mesh segment counts;
-  restore the desired quality only for the final pass.
-- Blender can be configured automatically to Metric/Millimeters with unit scale
-  `0.001`. STL has no inherent unit metadata, so the slicer's reported dimensions
-  are the final check.
+- Pale contours show projected mouths.
+- Dashed contours show glue feet.
+- Crosses mark root centres.
+- Short lines indicate the shape's local X direction.
+- IDs match individual files and plate diagrams.
 
-Blender's voxel remesher can expand or soften an edge by approximately one voxel.
-The printer margin and final slicer inspection are especially important when a
-panel is close to the bed limit.
+Coordinates start at the artwork's bottom-left. The SVG Y axis is flipped to match.
+Exported geometry already includes the listed rotation; do not apply that rotation
+a second time. Colour groups are optional suggestions from the height/cluster
+fields.
 
-A1 Mini specifications above follow the official [Bambu Lab A1 Mini quick-start
-guide](https://cdn1.bambulab.com/documentation/quick-start-f507128172bdf/Quick%20start%20guide%20-%20A1%20mini-EN.pdf).
+The CSV height_mm is actual total mesh height, including foot and highest rim.
+For compatibility, mouth_diameter_mm keeps its old name but now stores the larger
+actual X/Y mesh extent, rather than requested radius × 2. Complete contours and
+bounds are in manifest.json.
+
+## Shape and flow controls
+
+- **Density**: primary cups per 100 × 100 mm. Lower values make fewer, larger forms.
+- **Gap Fillers**: secondary cups where printable space remains.
+- **Hero Cup Fraction / Minimum / Maximum Scale**: size hierarchy.
+- **Cluster Strength / Scale**: grouping of related sizes.
+- **Packing Tightness**: expansion toward weighted neighbour boundaries.
+- **Mouth Shape Variation / Elongation**: irregularity and long openings.
+- **Throat Size / Offset**: the narrow, displaced cavity floor.
+- **Tulip Form**: narrow roots, early bellies and flared mouths.
+- **Rim Scallop**: optional lobing; zero produces continuous rims.
+- **Height / Radius Limit**: prevents tiny fillers becoming long stalks.
+- **Lean / Tilt / Bend Variation**: body sweep.
+- **Flow Alignment / Swirl / Scale**: coordinated mouth axes and bends.
+- **Wave Amplitude / Direction**: broad relief.
+- **Fit Broad Wave to Finished Work / Broad Wave Cycles**: wavelength from the full
+  artwork span.
+- **Noise Amplitude / Scale**: secondary height variation.
+- **Undercurrent Depth / Scale / Direction**: channels lowering selected groups.
+- **Mouth / Height Segments**: geometric resolution. Modular Coral uses 64 / 18;
+  reduce these for quick drafts.
+
+Fields use deterministic global coordinates. Modular artwork fixes the origin at
+its centre; manual tile coordinates apply to the legacy workflow. A different
+finished size recomputes packing, so separately generated artworks are not
+guaranteed to have matching mouths at their boundaries.
+
+## Other presets and legacy panels
+
+Presets include Dense Cellular Panel, Balanced Funnels, Deep Hero Funnels, Strong
+Undercurrent, Glue-Down Funnels, Funnels + Blocks and Rounded Block Field.
+
+**Generate Field** makes one manual tile. **Generate Panel Set** makes the manual
+grid. For shared backing panels choose **Panel Meshes** and **Common Panel**, then
+**Generate Finished Work**.
+
+Legacy panels share global height and orientation fields but pack independently
+inside each tile; straight seams can remain visible. Modular mode avoids that
+packing restart.
+
+## Printing limits
+
+- Test-print a small, medium, large and strongly leaning form first.
+- Default 0.8 mm walls target two 0.4 mm lines; inspect actual toolpaths. The wall
+  setting is radial and does not guarantee minimum surface-normal thickness.
+- Closed topology does not guarantee support-free printing or freedom from every
+  self-intersection under extreme custom settings.
+- Throats have closed floors rather than drainage holes.
+- Voxel remeshing is optional for connected modular pieces. Voxel size must be
+  at most 60% of wall thickness to help preserve openings.
+- Shared-base previews still have overlapping cup/base solids; voxel union remains
+  available when a connected panel is needed.
+- Actual modular piece bounds, including remesh changes, are checked against
+  usable XY and configured Z dimensions before replacing the previous artwork.
+- The A1 Mini's nominal build volume is 180 × 180 × 180 mm. Check dimensions,
+  adhesion, brims and overhangs in Bambu Studio.
+
+## Validation
+
+From the repository root:
+
+    blender --background --factory-startup --python-exit-code 1 --python tests/test_blender.py
+
+Tests cover full 600 × 1200 mm geometry, connected closed pieces, failure
+preservation, plate fit/spacing, STL bounds, SVG maps, stale-map detection, camera
+framing, zero-bevel blocks and legacy generation. Exports use a temporary directory.
+
+Recreate the checked-in preview from actual generated geometry:
+
+    blender --background --factory-startup --python tests/render_preview.py

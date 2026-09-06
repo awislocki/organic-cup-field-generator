@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Organic Cup Field Generator",
     "author": "OpenAI",
-    "version": (1, 7, 0),
+    "version": (1, 8, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Organic Cups",
     "description": "Generate packed, hollow organic cup fields with globally continuous heights",
@@ -10,14 +10,15 @@ bl_info = {
 
 """Organic Cup Field Generator for Blender 4.x.
 
-The add-on creates each cup as a closed hollow shell whose root overlaps a closed
-base plate.  In Preview mode these closed components remain independent inside
-one mesh object.  In Manifold mode a voxel remesh unions the components into a
-single printable surface.
+Individual glue-down forms are connected closed surfaces with integral flat feet.
+Shared-base previews contain closed cup shells overlapping a closed base plate;
+optional voxel remeshing unions those components. Artwork is composed globally
+before assignment to assembly regions, with SVG maps and spaced STL print plates.
 
 All authored dimensions are numeric millimeters.  When ``configure_scene_units``
 is enabled (the default), Blender is set to Metric / Millimeters / 0.001 unit
-scale so one Blender unit is displayed and exported as one millimeter.
+scale. The built-in package writer exports numeric millimeters independently of
+scene display units; external exporters require their own unit settings.
 """
 
 import math
@@ -25,6 +26,12 @@ import random
 import secrets
 import time
 import traceback
+import json
+import struct
+import tempfile
+import hashlib
+from types import SimpleNamespace
+from xml.sax.saxutils import escape
 from pathlib import Path
 
 import bpy
@@ -41,6 +48,7 @@ from bpy.types import Operator, Panel, PropertyGroup
 
 ADDON_PREFIX = "OCF_"
 ASSEMBLY_TEXT_NAME = "OCF_Assembly_Map.csv"
+VERSION = "1.8.0"
 UINT32_MASK = 0xFFFFFFFF
 TAU = math.tau
 
@@ -83,6 +91,43 @@ def _panel_plan(settings):
     panel_x = settings.finished_width / columns
     panel_y = settings.finished_height / rows
     return columns, rows, panel_x, panel_y, usable_x, usable_y
+
+
+def _snapshot(settings, **overrides):
+    """Plain numeric settings; never route artwork dimensions through RNA limits."""
+    values = {
+        name: getattr(settings, name)
+        for name in OCFSettings.__annotations__
+        if hasattr(settings, name) and name != "artwork_collection"
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _validate_settings(settings):
+    for minimum, maximum, label in (
+        (settings.min_cup_scale, settings.max_cup_scale, "Scale"),
+        (settings.min_height, settings.max_height, "Height"),
+        (settings.min_petals, settings.max_petals, "Rim lobes"),
+    ):
+        if minimum > maximum:
+            raise ValueError(f"{label}: minimum must not exceed maximum")
+    if settings.wall_thickness >= settings.min_height * 0.45:
+        raise ValueError("Wall thickness is too large for the minimum height")
+    _panel_plan(settings)
+
+
+def _master_settings(settings):
+    config = _snapshot(
+        settings, tile_size_x=settings.finished_width,
+        tile_size_y=settings.finished_height, tile_x=0, tile_y=0,
+    )
+    if config.auto_fit_wave_to_artwork:
+        direction = math.radians(config.wave_direction)
+        span = (abs(config.finished_width * math.cos(direction))
+                + abs(config.finished_height * math.sin(direction)))
+        config.wave_wavelength = span / config.wave_cycles_across_artwork
+    return config
 
 
 def _estimated_source_vertices(cup_count, settings):
@@ -1014,7 +1059,8 @@ def _append_cup(vertices, faces, spec, settings):
         )
         z = _ring_z_values(spec, t, base_top, height, radii)
         if level == 0:
-            embed = min(base_top * 0.38, wall * 0.70)
+            embed = (0.0 if settings.base_mode == "INDIVIDUAL_FEET"
+                     else min(base_top * 0.38, wall * 0.70))
             z = [value - embed for value in z]
         ring = _append_ring(vertices, spec, radii, offset_x, offset_y, z)
         outer_rings.append(ring)
@@ -1025,7 +1071,19 @@ def _append_cup(vertices, faces, spec, settings):
 
     for lower, upper in zip(outer_rings[:-1], outer_rings[1:]):
         _bridge_outer(faces, lower, upper)
-    faces.append(tuple(reversed(outer_rings[0])))
+    if settings.base_mode == "INDIVIDUAL_FEET":
+        # Join the pad perimeter directly to the body root. No buried duplicate
+        # caps or overlapping solids: every cup is one connected closed surface.
+        pad_radii, pad_x, pad_y = _foot_radii(spec, settings)
+        pad_bottom = _append_ring(vertices, spec, pad_radii, pad_x, pad_y, 0.0)
+        pad_top = _append_ring(
+            vertices, spec, pad_radii, pad_x, pad_y, base_top * 0.75,
+        )
+        faces.append(tuple(reversed(pad_bottom)))
+        _bridge_outer(faces, pad_bottom, pad_top)
+        _bridge_outer(faces, pad_top, outer_rings[0])
+    else:
+        faces.append(tuple(reversed(outer_rings[0])))
 
     # A raised crown ring and slightly lowered inner top ring create a printable
     # rolled lip without a subdivision modifier.
@@ -1107,37 +1165,18 @@ def _append_cup(vertices, faces, spec, settings):
     faces.append(tuple(inner_rings[0]))
 
 
-def _append_individual_foot(vertices, faces, spec, settings):
-    """Closed, flat organic pad for gluing one disconnected form to a panel."""
+def _foot_radii(spec, settings):
+    """Constrain an integral glue pad to the same cell as its parent form."""
     radial_count = settings.radial_segments
     foot_spec = dict(spec)
     root_ratio = max(spec["root_ratio"], 0.16)
     foot_spec["radius"] = spec["radius"] + settings.foot_flange / root_ratio
-    radii, offset_x, offset_y = _radial_limits(
+    return _radial_limits(
         foot_spec,
         0.0,
         settings,
         radial_count,
     )
-    bottom = _append_ring(
-        vertices,
-        spec,
-        radii,
-        offset_x,
-        offset_y,
-        0.0,
-    )
-    top = _append_ring(
-        vertices,
-        spec,
-        radii,
-        offset_x,
-        offset_y,
-        settings.individual_base_thickness,
-    )
-    faces.append(tuple(reversed(bottom)))
-    _bridge_outer(faces, bottom, top)
-    faces.append(tuple(top))
 
 
 def _block_footprint(spec, settings, count):
@@ -1203,7 +1242,8 @@ def _append_block(vertices, faces, spec, settings):
     radii = _block_footprint(spec, settings, radial_count)
     support_top = _support_top(settings)
     embed = min(support_top * 0.32, 0.55)
-    bottom_z = support_top - embed
+    bottom_z = (0.0 if settings.base_mode == "INDIVIDUAL_FEET"
+                else support_top - embed)
     top_z = support_top + spec["height"]
     total_height = top_z - bottom_z
     bevel = min(
@@ -1220,6 +1260,8 @@ def _append_block(vertices, faces, spec, settings):
         (top_z - bevel, radii),
         (top_z, inset_radii),
     )
+    if bevel < 1e-8:
+        levels = ((bottom_z, radii), (top_z, radii))
     rings = [
         _append_ring(vertices, spec, level_radii, 0.0, 0.0, z)
         for z, level_radii in levels
@@ -1268,9 +1310,6 @@ def _build_mesh_data(settings, progress_callback=None):
     faces = []
     if settings.base_mode == "COMMON_PANEL":
         _append_base(vertices, faces, settings)
-    else:
-        for spec in specs:
-            _append_individual_foot(vertices, faces, spec, settings)
     base_face_count = len(faces)
 
     for index, spec in enumerate(specs):
@@ -1288,8 +1327,7 @@ def _build_piece_mesh_data(spec, settings):
     """Build one glue-down form around its own object origin."""
     vertices = []
     faces = []
-    _append_individual_foot(vertices, faces, spec, settings)
-    foot_face_count = len(faces)
+    foot_face_count = 0
     if spec["form_type"] == "BLOCK":
         _append_block(vertices, faces, spec, settings)
     else:
@@ -1301,6 +1339,22 @@ def _build_piece_mesh_data(spec, settings):
         (x - origin_x, y - origin_y, z) for x, y, z in vertices
     ]
     return local_vertices, faces, foot_face_count
+
+
+def _vertex_bounds(vertices):
+    low = tuple(min(v[i] for v in vertices) for i in range(3))
+    high = tuple(max(v[i] for v in vertices) for i in range(3))
+    return low, high
+
+
+def _mesh_fingerprint(mesh):
+    digest = hashlib.sha256()
+    for vertex in mesh.vertices:
+        digest.update(struct.pack('<3f', *vertex.co))
+    for polygon in mesh.polygons:
+        digest.update(struct.pack('<I', len(polygon.vertices)))
+        digest.update(struct.pack(f'<{len(polygon.vertices)}I', *polygon.vertices))
+    return digest.hexdigest()
 
 
 ASSEMBLY_COLUMNS = (
@@ -1399,6 +1453,17 @@ def _apply_manifold_remesh(context, obj, settings):
 
 
 class OCFSettings(PropertyGroup):
+    artwork_collection: PointerProperty(type=bpy.types.Collection)
+    render_view: EnumProperty(
+        name="Camera View", items=(("TOP", "Straight On", "View every opening from above"),
+                                   ("ANGLED", "Angled Relief", "Show the height wave and cavities")),
+        default="ANGLED",
+    )
+    render_pixels: IntProperty(name="Image Long Edge (px)", default=1600, min=256, max=6000)
+    batch_spacing: FloatProperty(
+        name="Print Spacing (mm)", default=3.0, min=0.5, max=20.0,
+        description="Clearance between piece bounding boxes on exported print plates",
+    )
     style_preset: EnumProperty(
         name="Style Preset",
         description="Reference-oriented starting point; apply it before generating",
@@ -1478,7 +1543,7 @@ class OCFSettings(PropertyGroup):
                 "Omit the shared panel and give every form a small closed flat base",
             ),
         ),
-        default="COMMON_PANEL",
+        default="INDIVIDUAL_FEET",
     )
     form_style: EnumProperty(
         name="Form Type",
@@ -1537,7 +1602,7 @@ class OCFSettings(PropertyGroup):
     foot_flange: FloatProperty(
         name="Glue Foot Flange (mm)",
         description="Extra footprint around the narrow attachment root",
-        default=0.8,
+        default=1.4,
         min=0.0,
         max=5.0,
         precision=2,
@@ -1545,7 +1610,7 @@ class OCFSettings(PropertyGroup):
     density: FloatProperty(
         name="Density",
         description="Approximate cups per 100 x 100 mm area",
-        default=72.0,
+        default=6.6,
         min=1.0,
         max=90.0,
         precision=1,
@@ -1553,7 +1618,7 @@ class OCFSettings(PropertyGroup):
     filler_fraction: FloatProperty(
         name="Gap Fillers",
         description="Extra small cups placed into the largest voids as a fraction of the main count",
-        default=0.92,
+        default=0.42,
         min=0.0,
         max=1.25,
         subtype="FACTOR",
@@ -1569,7 +1634,7 @@ class OCFSettings(PropertyGroup):
     hero_fraction: FloatProperty(
         name="Hero Cup Fraction",
         description="Fraction of primary cups promoted into the largest scale tier",
-        default=0.14,
+        default=0.15,
         min=0.0,
         max=0.45,
         subtype="FACTOR",
@@ -1593,7 +1658,7 @@ class OCFSettings(PropertyGroup):
     min_cup_scale: FloatProperty(
         name="Minimum Scale",
         description="Smallest cup relative to automatically calculated spacing",
-        default=0.26,
+        default=0.42,
         min=0.25,
         max=2.0,
         precision=2,
@@ -1601,7 +1666,7 @@ class OCFSettings(PropertyGroup):
     max_cup_scale: FloatProperty(
         name="Maximum Scale",
         description="Largest cup relative to automatically calculated spacing",
-        default=2.00,
+        default=1.82,
         min=0.25,
         max=2.5,
         precision=2,
@@ -1609,7 +1674,7 @@ class OCFSettings(PropertyGroup):
     cluster_strength: FloatProperty(
         name="Cluster Strength",
         description="Bias placement and cup size toward a global continuous cluster field",
-        default=0.68,
+        default=0.74,
         min=0.0,
         max=1.0,
         subtype="FACTOR",
@@ -1617,7 +1682,7 @@ class OCFSettings(PropertyGroup):
     cluster_scale: FloatProperty(
         name="Cluster Scale (mm)",
         description="Approximate width of broad cup clusters",
-        default=78.0,
+        default=155,
         min=10.0,
         max=1000.0,
         precision=1,
@@ -1632,7 +1697,7 @@ class OCFSettings(PropertyGroup):
     min_height: FloatProperty(
         name="Minimum Height (mm)",
         description="Lowest cup mouth above the top of the base",
-        default=3.8,
+        default=7,
         min=3.0,
         max=300.0,
         precision=1,
@@ -1640,7 +1705,7 @@ class OCFSettings(PropertyGroup):
     max_height: FloatProperty(
         name="Maximum Height (mm)",
         description="Highest cup mouth above the top of the base",
-        default=21.0,
+        default=46,
         min=4.0,
         max=400.0,
         precision=1,
@@ -1648,7 +1713,7 @@ class OCFSettings(PropertyGroup):
     height_radius_limit: FloatProperty(
         name="Height / Radius Limit",
         description="Maximum slenderness; keeps tiny filler cups shallow while large cups form the crests",
-        default=1.65,
+        default=2.15,
         min=1.2,
         max=8.0,
         precision=2,
@@ -1664,7 +1729,7 @@ class OCFSettings(PropertyGroup):
     mouth_variation: FloatProperty(
         name="Mouth Shape Variation",
         description="Strength of amoeba, teardrop, and harmonic mouth distortion",
-        default=0.68,
+        default=0.58,
         min=0.0,
         max=1.0,
         subtype="FACTOR",
@@ -1702,7 +1767,7 @@ class OCFSettings(PropertyGroup):
     max_lean: FloatProperty(
         name="Maximum Lean / Tilt (degrees)",
         description="Maximum centerline lean in degrees",
-        default=28.0,
+        default=24,
         min=0.0,
         max=60.0,
         precision=1,
@@ -1710,7 +1775,7 @@ class OCFSettings(PropertyGroup):
     bend_variation: FloatProperty(
         name="Bend Variation",
         description="Centerline bend as a fraction of cup radius",
-        default=0.62,
+        default=0.58,
         min=0.0,
         max=1.2,
         precision=2,
@@ -1726,7 +1791,7 @@ class OCFSettings(PropertyGroup):
     rotation_variation: FloatProperty(
         name="Rotation Variation (degrees)",
         description="Random rotation range around the base rotation",
-        default=90.0,
+        default=82,
         min=0.0,
         max=180.0,
         precision=1,
@@ -1734,7 +1799,7 @@ class OCFSettings(PropertyGroup):
     mouth_elongation: FloatProperty(
         name="Mouth Elongation",
         description="Stretch mouths from rounded triangles toward long teardrop and oval forms",
-        default=0.23,
+        default=0.25,
         min=0.0,
         max=0.48,
         precision=2,
@@ -1742,7 +1807,7 @@ class OCFSettings(PropertyGroup):
     throat_size: FloatProperty(
         name="Throat Size",
         description="Size of the small dark cavity floor relative to the cup radius",
-        default=0.10,
+        default=0.09,
         min=0.04,
         max=0.35,
         precision=2,
@@ -1750,7 +1815,7 @@ class OCFSettings(PropertyGroup):
     throat_offset: FloatProperty(
         name="Throat Offset",
         description="How far the narrow funnel throat shifts away from the mouth center",
-        default=0.30,
+        default=0.31,
         min=0.0,
         max=0.65,
         precision=2,
@@ -1758,7 +1823,7 @@ class OCFSettings(PropertyGroup):
     height_size_correlation: FloatProperty(
         name="Crest Size Correlation",
         description="Make crest cups larger and undercurrent cups smaller",
-        default=0.72,
+        default=0.78,
         min=0.0,
         max=1.0,
         subtype="FACTOR",
@@ -1766,7 +1831,7 @@ class OCFSettings(PropertyGroup):
     flow_alignment: FloatProperty(
         name="Flow Alignment",
         description="Align mouth rotation, lean, and bend to one continuous global vector field",
-        default=0.84,
+        default=0.91,
         min=0.0,
         max=1.0,
         subtype="FACTOR",
@@ -1774,7 +1839,7 @@ class OCFSettings(PropertyGroup):
     flow_swirl: FloatProperty(
         name="Flow Swirl",
         description="Blend the broad wave direction toward curling local streamlines",
-        default=0.96,
+        default=0.93,
         min=0.0,
         max=1.0,
         subtype="FACTOR",
@@ -1782,7 +1847,7 @@ class OCFSettings(PropertyGroup):
     orientation_flow_scale: FloatProperty(
         name="Flow Scale (mm)",
         description="Feature size of coherent mouth-orientation swirls",
-        default=62.0,
+        default=135,
         min=12.0,
         max=3000.0,
         precision=1,
@@ -1790,7 +1855,7 @@ class OCFSettings(PropertyGroup):
     wave_amplitude: FloatProperty(
         name="Wave Amplitude (mm)",
         description="Height added and removed by the broad directional wave",
-        default=6.5,
+        default=13,
         min=0.0,
         max=100.0,
         precision=1,
@@ -1798,7 +1863,7 @@ class OCFSettings(PropertyGroup):
     wave_wavelength: FloatProperty(
         name="Wave Wavelength (mm)",
         description="Distance between broad height-wave peaks",
-        default=300.0,
+        default=620,
         min=8.0,
         max=20000.0,
         precision=1,
@@ -1814,7 +1879,7 @@ class OCFSettings(PropertyGroup):
     noise_amplitude: FloatProperty(
         name="Noise Amplitude (mm)",
         description="Height contribution of the continuous global noise field",
-        default=2.0,
+        default=3,
         min=0.0,
         max=100.0,
         precision=1,
@@ -1822,7 +1887,7 @@ class OCFSettings(PropertyGroup):
     noise_scale: FloatProperty(
         name="Noise Scale (mm)",
         description="Feature scale of the global height noise",
-        default=125.0,
+        default=185,
         min=5.0,
         max=2000.0,
         precision=1,
@@ -1830,7 +1895,7 @@ class OCFSettings(PropertyGroup):
     undercurrent_depth: FloatProperty(
         name="Undercurrent Depth (mm)",
         description="Maximum downward pressure from the warped current channels",
-        default=8.5,
+        default=13,
         min=0.0,
         max=100.0,
         precision=1,
@@ -1838,7 +1903,7 @@ class OCFSettings(PropertyGroup):
     undercurrent_scale: FloatProperty(
         name="Undercurrent Scale (mm)",
         description="Width and spacing of the downward-flowing channels",
-        default=68.0,
+        default=112,
         min=8.0,
         max=1000.0,
         precision=1,
@@ -1948,7 +2013,7 @@ class OCFSettings(PropertyGroup):
     edge_clearance: FloatProperty(
         name="Edge Clearance (mm)",
         description="Distance between cup walls and the tile edge",
-        default=0.10,
+        default=1,
         min=0.0,
         max=20.0,
         precision=2,
@@ -1956,14 +2021,14 @@ class OCFSettings(PropertyGroup):
     radial_segments: IntProperty(
         name="Mouth Segments",
         description="Vertices around each cup; 32-40 is a useful print range",
-        default=36,
+        default=64,
         min=12,
         max=96,
     )
     vertical_segments: IntProperty(
         name="Height Segments",
         description="Rings along each cup wall",
-        default=9,
+        default=18,
         min=3,
         max=32,
     )
@@ -1975,7 +2040,7 @@ class OCFSettings(PropertyGroup):
     voxel_size: FloatProperty(
         name="Voxel Size (mm)",
         description="Manifold remesh resolution; use roughly one-half of wall thickness",
-        default=0.50,
+        default=0.4,
         min=0.20,
         max=5.0,
         precision=2,
@@ -2015,6 +2080,8 @@ PRESET_LABELS = {
 
 STYLE_PRESETS = {
     "PARAGAMI_CORAL": {
+        "radial_segments": 64,
+        "vertical_segments": 18,
         "output_mode": "NUMBERED_PIECES",
         "base_mode": "INDIVIDUAL_FEET",
         "form_style": "ORGANIC_FUNNELS",
@@ -2286,6 +2353,10 @@ def _apply_style_preset(settings, preset_id):
         "tulip_strength": 1.0,
         "petal_depth": 0.0,
         "edge_clearance": 0.10,
+        "merge_manifold": False,
+        "voxel_size": 0.4,
+        "radial_segments": 36,
+        "vertical_segments": 9,
     }
     values = STYLE_PRESETS.get(preset_id, STYLE_PRESETS["PARAGAMI_CORAL"])
     for property_name, value in common.items():
@@ -2449,7 +2520,7 @@ class OCF_OT_generate_field(Operator):
             for polygon in mesh.polygons:
                 polygon.use_smooth = polygon.index >= base_face_count
 
-            obj["ocf_generator_version"] = "1.7.0"
+            obj["ocf_generator_version"] = VERSION
             obj["ocf_seed"] = settings.random_seed
             obj["ocf_tile_x"] = settings.tile_x
             obj["ocf_tile_y"] = settings.tile_y
@@ -2475,6 +2546,8 @@ class OCF_OT_generate_field(Operator):
                 obj.data.name = f"{ADDON_PREFIX}ManifoldMesh_{suffix}"
                 obj["ocf_output"] = "VOXEL_MANIFOLD"
                 obj["ocf_voxel_size_mm"] = settings.voxel_size
+
+            context.scene["ocf_panel_objects"] = json.dumps([obj.name])
 
         except Exception as exc:
             traceback.print_exc()
@@ -2572,6 +2645,7 @@ class OCF_OT_generate_panel_set(Operator):
             return {"CANCELLED"}
 
         elapsed = time.perf_counter() - started
+        context.scene["ocf_panel_objects"] = json.dumps([obj.name for obj in generated_objects])
         self.report(
             {"INFO"},
             f"Generated {panel_total} panels with continuous global height and flow fields in {elapsed:.1f} seconds",
@@ -2594,236 +2668,204 @@ class OCF_OT_generate_modular_artwork(Operator):
 
     def execute(self, context):
         settings = context.scene.ocf_settings
-        if settings.base_mode != "INDIVIDUAL_FEET":
-            self.report(
-                {"ERROR"},
-                "Numbered artwork requires Mounting Mode: Individual Glue Feet",
-            )
-            return {"CANCELLED"}
-        try:
-            columns, rows, panel_x, panel_y, usable_x, usable_y = _panel_plan(
-                settings
-            )
-        except ValueError as exc:
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
-
-        artwork_area = settings.finished_width * settings.finished_height
-        estimated_count = _estimated_cup_count(artwork_area, settings)
-        primary_count = _base_cup_count(artwork_area, settings)
-        if primary_count > 1500 or estimated_count > 2200:
-            self.report(
-                {"ERROR"},
-                "Modular artwork exceeds the 2,200-piece safety limit; lower Density or artwork size",
-            )
-            return {"CANCELLED"}
-        if _estimated_source_vertices(estimated_count, settings) > 8_000_000:
-            self.report(
-                {"ERROR"},
-                "Modular artwork would exceed 8 million source vertices; reduce quality",
-            )
-            return {"CANCELLED"}
-
-        previous = {
-            "tile_size_x": settings.tile_size_x,
-            "tile_size_y": settings.tile_size_y,
-            "tile_x": settings.tile_x,
-            "tile_y": settings.tile_y,
-        }
+        staging = None
+        wm = context.window_manager
         started = time.perf_counter()
-        window_manager = context.window_manager
-        window_manager.progress_begin(0, max(estimated_count, 1))
-        created_objects = []
         try:
-            if settings.configure_scene_units:
-                context.scene.unit_settings.system = "METRIC"
-                context.scene.unit_settings.length_unit = "MILLIMETERS"
-                context.scene.unit_settings.scale_length = 0.001
+            _validate_settings(settings)
+            if settings.base_mode != "INDIVIDUAL_FEET":
+                raise ValueError("Numbered artwork requires Individual Glue Feet")
+            columns, rows, panel_x, panel_y, usable_x, usable_y = _panel_plan(settings)
+            config = _master_settings(settings)
+            estimated = _estimated_cup_count(config.finished_width * config.finished_height, config)
+            primary = _base_cup_count(config.finished_width * config.finished_height, config)
+            if primary > 1500 or estimated > 2200:
+                raise ValueError("Artwork exceeds 1,500 primary / 2,200 total pieces; lower Density")
+            if _estimated_source_vertices(estimated, config) > 8_000_000:
+                raise ValueError("Artwork exceeds 8 million source vertices; reduce quality")
+            if config.merge_manifold and config.voxel_size > config.wall_thickness * 0.6:
+                raise ValueError("Use Voxel Size at most 60% of Wall Thickness to preserve openings")
 
-            # This is the essential modular distinction: packing is solved once
-            # over the complete artwork. Panel boundaries are assigned only
-            # after the geometry exists, so they cannot restart the composition.
-            settings.tile_size_x = settings.finished_width
-            settings.tile_size_y = settings.finished_height
-            settings.tile_x = 0
-            settings.tile_y = 0
-            specs = _make_specs(settings)
-
-            root_name = f"{ADDON_PREFIX}Modular_Artwork"
-            _remove_generated_collection(root_name)
-            root = bpy.data.collections.new(root_name)
-            context.scene.collection.children.link(root)
-
-            panel_collections = {}
+            wm.progress_begin(0, max(estimated, 1))
+            specs = _make_specs(config)
+            # Stage the complete replacement. A failure must leave the last good
+            # artwork, its placement map, and the user's settings untouched.
+            staging = bpy.data.collections.new("OCF_Building")
+            context.scene.collection.children.link(staging)
+            staging["ocf_generated"] = True
+            panels = {}
             for row in range(rows):
                 for column in range(columns):
-                    panel_number = row * columns + column + 1
-                    panel_label = f"P{panel_number:02d}_R{row + 1:02d}_C{column + 1:02d}"
-                    panel_collection = bpy.data.collections.new(
-                        f"{ADDON_PREFIX}{panel_label}"
-                    )
-                    root.children.link(panel_collection)
-                    panel_collections[(column, row)] = (
-                        panel_number,
-                        panel_label,
-                        panel_collection,
-                    )
-
-                    guide = bpy.data.objects.new(
-                        f"{ADDON_PREFIX}GUIDE_{panel_label}", None
-                    )
+                    number = row * columns + column + 1
+                    label = f"P{number:02d}_R{row + 1:02d}_C{column + 1:02d}"
+                    collection = bpy.data.collections.new(f"OCF_{label}")
+                    staging.children.link(collection)
+                    guide = bpy.data.objects.new(f"OCF_GUIDE_{label}", None)
                     guide.empty_display_type = "CUBE"
                     guide.empty_display_size = 1.0
                     guide.location = (
-                        -settings.finished_width * 0.5 + (column + 0.5) * panel_x,
-                        -settings.finished_height * 0.5 + (row + 0.5) * panel_y,
-                        0.0,
+                        -config.finished_width / 2 + (column + 0.5) * panel_x,
+                        -config.finished_height / 2 + (row + 0.5) * panel_y, 0,
                     )
-                    guide.scale = (panel_x * 0.5, panel_y * 0.5, 0.05)
+                    guide.scale = (panel_x / 2, panel_y / 2, 0.05)
                     guide.hide_render = True
                     guide.show_name = True
-                    panel_collection.objects.link(guide)
+                    collection.objects.link(guide)
+                    panels[column, row] = (number, label, collection)
 
-            def panel_for_spec(spec):
-                x_from_left = spec["x"] + settings.finished_width * 0.5
-                y_from_bottom = spec["y"] + settings.finished_height * 0.5
-                column = min(columns - 1, max(0, int(x_from_left / panel_x)))
-                row = min(rows - 1, max(0, int(y_from_bottom / panel_y)))
-                return column, row
+            def region(spec):
+                x = spec["x"] + config.finished_width / 2
+                y = spec["y"] + config.finished_height / 2
+                return (min(columns - 1, max(0, int(x / panel_x))),
+                        min(rows - 1, max(0, int(y / panel_y))))
 
-            specs.sort(
-                key=lambda spec: (
-                    panel_for_spec(spec)[1],
-                    panel_for_spec(spec)[0],
-                    spec["y"],
-                    spec["x"],
-                )
-            )
-            per_panel_numbers = {}
-            assembly_rows = []
-            material = _get_preview_material()
-
+            specs.sort(key=lambda s: (region(s)[1], region(s)[0], s["y"], s["x"]))
+            counts, records, created = {}, [], []
             for index, spec in enumerate(specs):
-                column, row = panel_for_spec(spec)
-                panel_number, panel_label, panel_collection = panel_collections[
-                    (column, row)
-                ]
-                piece_number = per_panel_numbers.get((column, row), 0) + 1
-                per_panel_numbers[(column, row)] = piece_number
-                piece_id = f"P{panel_number:02d}-{piece_number:03d}"
-
-                vertices, faces, foot_face_count = _build_piece_mesh_data(
-                    spec, settings
-                )
-                mesh = bpy.data.meshes.new(f"{ADDON_PREFIX}Mesh_{piece_id}")
+                column, row = region(spec)
+                number, label, collection = panels[column, row]
+                counts[column, row] = counts.get((column, row), 0) + 1
+                piece_id = f"P{number:02d}-{counts[column, row]:03d}"
+                vertices, faces, _ = _build_piece_mesh_data(spec, config)
+                mesh = bpy.data.meshes.new(f"OCF_Mesh_{piece_id}")
                 mesh.from_pydata(vertices, [], faces)
-                mesh.validate(verbose=False)
                 mesh.update(calc_edges=True)
-                for polygon in mesh.polygons:
-                    polygon.use_smooth = polygon.index >= foot_face_count
+                obj = bpy.data.objects.new(f"OCF_{piece_id}_{spec['form_type']}", mesh)
+                collection.objects.link(obj)
+                obj.location = (spec["x"], spec["y"], 0)
+                obj.data.materials.append(_get_preview_material())
+                if config.merge_manifold:
+                    low, high = _vertex_bounds([v.co for v in mesh.vertices])
+                    voxel_count = math.prod(
+                        (high[i] - low[i] + 2 * config.voxel_size) / config.voxel_size
+                        for i in range(3)
+                    )
+                    if voxel_count > 60_000_000:
+                        raise ValueError(f"{piece_id}: voxel grid too large; reduce height or quality")
+                    _apply_manifold_remesh(context, obj, config)
+                for polygon in obj.data.polygons:
+                    polygon.use_smooth = len(polygon.vertices) == 4
 
-                obj = bpy.data.objects.new(
-                    f"{ADDON_PREFIX}{piece_id}_{spec['form_type']}", mesh
+                low, high = _vertex_bounds([v.co for v in obj.data.vertices])
+                dimensions = [high[i] - low[i] for i in range(3)]
+                if (dimensions[0] > usable_x or dimensions[1] > usable_y
+                        or dimensions[2] > config.printer_bed_z):
+                    raise ValueError(
+                        f"{piece_id} is {dimensions[0]:.1f} x {dimensions[1]:.1f} x "
+                        f"{dimensions[2]:.1f} mm; increase Density or reduce height to fit the bed"
+                    )
+                x = spec["x"] + config.finished_width / 2
+                y = spec["y"] + config.finished_height / 2
+                local_x, local_y = x - column * panel_x, y - row * panel_y
+                score = _clamp(
+                    0.55 * spec["cluster"] + 0.45 * (spec["height"] - config.min_height)
+                    / max(config.max_height - config.min_height, 1e-6), 0, 0.999999,
                 )
-                panel_collection.objects.link(obj)
-                obj.location = (spec["x"], spec["y"], 0.0)
-                obj.data.materials.append(material)
-                obj.color = (0.42, 0.68, 0.57, 1.0)
-
-                x_from_left = spec["x"] + settings.finished_width * 0.5
-                y_from_bottom = spec["y"] + settings.finished_height * 0.5
-                local_x = x_from_left - column * panel_x
-                local_y = y_from_bottom - row * panel_y
-                colour_score = _clamp(
-                    0.55 * spec["cluster"]
-                    + 0.45
-                    * (
-                        (spec["height"] - settings.min_height)
-                        / max(settings.max_height - settings.min_height, 1.0e-6)
-                    ),
-                    0.0,
-                    0.999999,
+                colour = 1 + int(score * 5)
+                # Store actual generated contours and dimensions, not requested
+                # radii. Cell clipping, tilt and remeshing can change those sizes.
+                radii, offset_x, offset_y = (
+                    (_block_footprint(spec, config, config.radial_segments), 0, 0)
+                    if spec["form_type"] == "BLOCK"
+                    else _radial_limits(spec, 1.0, config, config.radial_segments)
                 )
-                colour_group = 1 + int(colour_score * 5.0)
-
-                obj["ocf_generator_version"] = "1.7.0"
+                outline = [
+                    [x + offset_x + r * math.cos(TAU * j / len(radii) + spec["rotation"]),
+                     y + offset_y + r * math.sin(TAU * j / len(radii) + spec["rotation"])]
+                    for j, r in enumerate(radii)
+                ]
+                pad, pad_x, pad_y = (
+                    (_block_footprint(spec, config, config.radial_segments), 0, 0)
+                    if spec["form_type"] == "BLOCK" else _foot_radii(spec, config)
+                )
+                foot_outline = [
+                    [x + pad_x + r * math.cos(TAU * j / len(pad) + spec["rotation"]),
+                     y + pad_y + r * math.sin(TAU * j / len(pad) + spec["rotation"])]
+                    for j, r in enumerate(pad)
+                ]
+                record = dict(
+                    piece_id=piece_id, panel=label, panel_column=column + 1,
+                    panel_row=row + 1, local_x_mm=round(local_x, 3),
+                    local_y_mm=round(local_y, 3), artwork_x_mm=round(x, 3),
+                    artwork_y_mm=round(y, 3),
+                    rotation_degrees=round(math.degrees(spec["rotation"]), 3),
+                    height_mm=round(dimensions[2], 3),
+                    mouth_diameter_mm=round(max(dimensions[:2]), 3),
+                    form_type=spec["form_type"], colour_group=colour,
+                    outline=outline, foot_outline=foot_outline,
+                    bounds_min=list(low), bounds_max=list(high),
+                )
+                records.append(record)
+                obj["ocf_generator_version"] = VERSION
                 obj["ocf_piece_id"] = piece_id
-                obj["ocf_panel"] = panel_label
+                obj["ocf_panel"] = label
                 obj["ocf_panel_column"] = column + 1
                 obj["ocf_panel_row"] = row + 1
                 obj["ocf_local_xy_mm"] = (local_x, local_y)
-                obj["ocf_artwork_xy_mm"] = (x_from_left, y_from_bottom)
-                obj["ocf_rotation_degrees"] = math.degrees(spec["rotation"])
-                obj["ocf_height_mm"] = spec["height"]
-                obj["ocf_mouth_diameter_mm"] = spec["radius"] * 2.0
-                obj["ocf_colour_group"] = colour_group
-                obj["ocf_seed"] = settings.random_seed
-                obj["ocf_output"] = "NUMBERED_GLUE_DOWN_PIECE"
+                obj["ocf_artwork_xy_mm"] = (x, y)
+                obj["ocf_rotation_degrees"] = record["rotation_degrees"]
+                obj["ocf_height_mm"] = dimensions[2]
+                obj["ocf_colour_group"] = colour
+                obj["ocf_seed"] = config.random_seed
+                obj["ocf_output"] = "CONNECTED_GLUE_DOWN_PIECE"
+                obj["ocf_mesh_signature"] = _mesh_fingerprint(obj.data)
+                created.append(obj)
+                wm.progress_update(index + 1)
 
-                if settings.merge_manifold:
-                    _apply_manifold_remesh(context, obj, settings)
-                    obj["ocf_output"] = "NUMBERED_VOXEL_MANIFOLD_PIECE"
-                    obj["ocf_voxel_size_mm"] = settings.voxel_size
-
-                assembly_rows.append(
-                    {
-                        "piece_id": piece_id,
-                        "panel": panel_label,
-                        "panel_column": column + 1,
-                        "panel_row": row + 1,
-                        "local_x_mm": f"{local_x:.2f}",
-                        "local_y_mm": f"{local_y:.2f}",
-                        "artwork_x_mm": f"{x_from_left:.2f}",
-                        "artwork_y_mm": f"{y_from_bottom:.2f}",
-                        "rotation_degrees": f"{math.degrees(spec['rotation']):.2f}",
-                        "height_mm": f"{spec['height']:.2f}",
-                        "mouth_diameter_mm": f"{spec['radius'] * 2.0:.2f}",
-                        "form_type": spec["form_type"],
-                        "colour_group": colour_group,
-                    }
-                )
-                created_objects.append(obj)
-                window_manager.progress_update(index + 1)
-
-            text_block = _write_assembly_text(assembly_rows)
-            root["ocf_generator_version"] = "1.7.0"
-            root["ocf_seed"] = settings.random_seed
-            root["ocf_piece_count"] = len(specs)
-            root["ocf_panel_columns"] = columns
-            root["ocf_panel_rows"] = rows
-            root["ocf_panel_size_mm"] = (panel_x, panel_y)
-            root["ocf_finished_size_mm"] = (
-                settings.finished_width,
-                settings.finished_height,
+            manifest = dict(
+                version=VERSION, width=config.finished_width, height=config.finished_height,
+                columns=columns, rows=rows, panel_width=panel_x, panel_height=panel_y,
+                usable_x=usable_x, usable_y=usable_y, seed=config.random_seed,
+                wave_wavelength=config.wave_wavelength, settings=vars(config), pieces=records,
             )
-            root["ocf_assembly_text"] = text_block.name
-            root["ocf_printer_usable_xy_mm"] = (usable_x, usable_y)
+            staging["ocf_manifest"] = json.dumps(manifest)
+            staging["ocf_generator_version"] = VERSION
+            staging["ocf_seed"] = config.random_seed
+            staging["ocf_piece_count"] = len(created)
+            staging["ocf_finished_size_mm"] = (config.finished_width, config.finished_height)
+            staging["ocf_panel_size_mm"] = (panel_x, panel_y)
+            staging["ocf_panel_columns"] = columns
+            staging["ocf_panel_rows"] = rows
 
+            old = settings.artwork_collection
+            if old and old.get("ocf_generated"):
+                # A collection used in another scene is retained there.
+                shared_with_other_scene = any(
+                    s != context.scene and old in tuple(s.collection.children_recursive)
+                    for s in bpy.data.scenes
+                )
+                if shared_with_other_scene:
+                    if old.name in context.scene.collection.children:
+                        context.scene.collection.children.unlink(old)
+                else:
+                    _remove_generated_collection(old.name)
+            staging.name = "OCF_Modular_Artwork"
+            settings.artwork_collection = staging
+            _write_assembly_text(records)
+            if config.configure_scene_units:
+                context.scene.unit_settings.system = "METRIC"
+                context.scene.unit_settings.length_unit = "MILLIMETERS"
+                context.scene.unit_settings.scale_length = 0.001
+            for selected in list(context.selected_objects):
+                selected.select_set(False)
+            for obj in created:
+                obj.select_set(True)
+            context.view_layer.objects.active = created[-1] if created else None
+            context.view_layer.update()
+            self.report(
+                {"INFO"}, f"Created {len(created)} connected pieces over "
+                f"{config.finished_width:.0f} x {config.finished_height:.0f} mm "
+                f"in {time.perf_counter() - started:.1f}s",
+            )
+            return {"FINISHED"}
         except Exception as exc:
+            if staging and staging != settings.artwork_collection:
+                _remove_generated_collection(staging.name)
             traceback.print_exc()
-            self.report({"ERROR"}, f"Modular artwork generation failed: {exc}")
+            self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         finally:
-            settings.tile_size_x = previous["tile_size_x"]
-            settings.tile_size_y = previous["tile_size_y"]
-            settings.tile_x = previous["tile_x"]
-            settings.tile_y = previous["tile_y"]
-            window_manager.progress_end()
-
-        for selected in list(context.selected_objects):
-            selected.select_set(False)
-        for obj in created_objects:
-            obj.select_set(True)
-        if created_objects:
-            context.view_layer.objects.active = created_objects[-1]
-
-        elapsed = time.perf_counter() - started
-        self.report(
-            {"INFO"},
-            f"Generated {len(created_objects)} numbered pieces across {columns * rows} assembly regions in {elapsed:.1f} seconds",
-        )
-        return {"FINISHED"}
-
+            wm.progress_end()
 
 class OCF_OT_export_assembly_csv(Operator):
     bl_idname = "ocf.export_assembly_csv"
@@ -2840,6 +2882,7 @@ class OCF_OT_export_assembly_csv(Operator):
         return {"RUNNING_MODAL"}
 
     def execute(self, context):
+        root = context.scene.ocf_settings.artwork_collection
         text_block = bpy.data.texts.get(ASSEMBLY_TEXT_NAME)
         if text_block is None:
             self.report({"ERROR"}, "Generate numbered artwork before saving its map")
@@ -2848,7 +2891,9 @@ class OCF_OT_export_assembly_csv(Operator):
         if target.suffix.lower() != ".csv":
             target = target.with_suffix(".csv")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text_block.as_string(), encoding="utf-8", newline="")
+        content = (_assembly_csv(json.loads(root["ocf_manifest"])["pieces"])
+                   if root and root.get("ocf_manifest") else text_block.as_string())
+        target.write_text(content, encoding="utf-8", newline="")
         context.scene.ocf_settings.assembly_csv_path = str(target)
         self.report({"INFO"}, f"Saved assembly map: {target.name}")
         return {"FINISHED"}
@@ -2868,6 +2913,8 @@ class OCF_OT_generate_finished_work(Operator):
 
     def execute(self, context):
         settings = context.scene.ocf_settings
+        if settings.output_mode == "NUMBERED_PIECES":
+            return bpy.ops.ocf.generate_modular_artwork()
         try:
             columns, rows, panel_x, panel_y, usable_x, usable_y = _panel_plan(
                 settings
@@ -2970,6 +3017,369 @@ class OCF_OT_generate_finished_work(Operator):
         return {"FINISHED"}
 
 
+
+# -----------------------------------------------------------------------------
+# Framing, rendering and self-contained assembly/printing package
+
+def _artwork_objects(context):
+    root = context.scene.ocf_settings.artwork_collection
+    if root and context.scene.ocf_settings.output_mode == "NUMBERED_PIECES":
+        return [o for o in root.all_objects if o.type == "MESH"]
+    names = json.loads(context.scene.get("ocf_panel_objects", "[]"))
+    if names:
+        return [context.scene.objects[name] for name in names if name in context.scene.objects]
+    return [o for o in context.scene.objects
+            if o.type == "MESH" and o.get("ocf_output") and not o.get("ocf_piece_id")]
+
+
+def _manifest(context):
+    root = context.scene.ocf_settings.artwork_collection
+    if not root or not root.get("ocf_manifest"):
+        raise ValueError("Generate numbered artwork with this version first")
+    return json.loads(root["ocf_manifest"])
+
+
+def _svg_map(manifest, column=None, row=None):
+    width, height = manifest["width"], manifest["height"]
+    x0 = y0 = 0.0
+    if column is not None:
+        width, height = manifest["panel_width"], manifest["panel_height"]
+        x0, y0 = column * width, row * height
+    points = lambda outline: " ".join(
+        f"{x - x0:.3f},{height - (y - y0):.3f}" for x, y in outline
+    )
+    svg = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}mm" '
+        f'height="{height}mm" viewBox="0 0 {width} {height}">',
+        '<title>Organic Cups — full scale mounting map; print at 100%</title>',
+        '<rect width="100%" height="100%" fill="white"/>',
+    ]
+    colours = ("#eef0df", "#dce8e3", "#d3e0e8", "#e3d9db", "#e8d8c4")
+    for p in manifest["pieces"]:
+        if column is not None and (p["panel_column"] != column + 1 or p["panel_row"] != row + 1):
+            continue
+        svg.append(f'<polygon points="{points(p["outline"])}" '
+                   f'fill="{colours[p["colour_group"] - 1]}" stroke="#777" stroke-width=".18"/>')
+        svg.append(f'<polygon points="{points(p["foot_outline"])}" '
+                   'fill="none" stroke="#222" stroke-width=".25" stroke-dasharray="1 .6"/>')
+        x, y = p["artwork_x_mm"] - x0, height - (p["artwork_y_mm"] - y0)
+        angle = math.radians(p["rotation_degrees"])
+        dx, dy = 3.5 * math.cos(angle), -3.5 * math.sin(angle)
+        svg.append(f'<path d="M{x-1},{y}h2 M{x},{y-1}v2 M{x},{y}l{dx},{dy}" '
+                   'fill="none" stroke="#111" stroke-width=".3"/>')
+        svg.append(f'<text x="{x}" y="{y+3}" font-family="sans-serif" '
+                   f'font-size="2.4" text-anchor="middle">{escape(p["piece_id"])}</text>')
+    if column is None:
+        for c in range(1, manifest["columns"]):
+            x = c * manifest["panel_width"]
+            svg.append(f'<path d="M{x},0V{height}" stroke="#22649c" stroke-width=".3" '
+                       'stroke-dasharray="3 2"/>')
+        for r in range(1, manifest["rows"]):
+            y = r * manifest["panel_height"]
+            svg.append(f'<path d="M0,{y}H{width}" stroke="#22649c" stroke-width=".3" '
+                       'stroke-dasharray="3 2"/>')
+    svg.append(f'<rect x=".2" y=".2" width="{width-.4}" height="{height-.4}" '
+               'fill="none" stroke="#111" stroke-width=".3"/>')
+    # A physical ruler makes accidental fit-to-page scaling visible.
+    svg.append('<path d="M5,5H25 M5,3V7 M25,3V7" stroke="#111" stroke-width=".3"/>')
+    svg.append('<text x="15" y="10" font-family="sans-serif" font-size="2.5" '
+               'text-anchor="middle">20 mm</text></svg>')
+    return "\n".join(svg)
+
+
+def _pack_plates(records, width, height, gap):
+    """Deterministic shelf packing, no rotations; all 3D bounds remain disjoint."""
+    plates = []
+    for record in sorted(records, key=lambda p: (
+        -(p["bounds_max"][1] - p["bounds_min"][1]), p["piece_id"]
+    )):
+        low, high = record["bounds_min"], record["bounds_max"]
+        w, h = high[0] - low[0], high[1] - low[1]
+        if w > width + 1e-6 or h > height + 1e-6:
+            raise ValueError(f'{record["piece_id"]} exceeds the usable print bed')
+        placed = False
+        for plate in plates:
+            for shelf in plate["shelves"]:
+                if h <= shelf["height"] + 1e-6 and shelf["next_x"] + w <= width + 1e-6:
+                    plate["pieces"].append((record, shelf["next_x"], shelf["y"]))
+                    shelf["next_x"] += w + gap
+                    placed = True
+                    break
+            if placed:
+                break
+            y = sum(s["height"] + gap for s in plate["shelves"])
+            if y + h <= height + 1e-6:
+                plate["shelves"].append(dict(height=h, next_x=w + gap, y=y))
+                plate["pieces"].append((record, 0.0, y))
+                placed = True
+                break
+        if not placed:
+            plates.append(dict(shelves=[dict(height=h, next_x=w + gap, y=0.0)],
+                               pieces=[(record, 0.0, 0.0)]))
+    return plates
+
+
+def _write_stl(path, objects_and_offsets):
+    """Write numeric millimetres directly; independent of Blender STL extensions."""
+    count = 0
+    for obj, offset in objects_and_offsets:
+        obj.data.calc_loop_triangles()
+        count += len(obj.data.loop_triangles)
+    with path.open("wb") as handle:
+        handle.write(b"Organic Cups: coordinates in millimetres".ljust(80, b"\0"))
+        handle.write(struct.pack("<I", count))
+        for obj, offset in objects_and_offsets:
+            mesh = obj.data
+            for triangle in mesh.loop_triangles:
+                a, b, c = [mesh.vertices[i].co for i in triangle.vertices]
+                normal = (b - a).cross(c - a).normalized()
+                xyz = [value + offset[axis]
+                       for point in (a, b, c) for axis, value in enumerate(point)]
+                handle.write(struct.pack("<12fH", *normal, *xyz, 0))
+
+
+def _export_print_package(context, directory):
+    context.view_layer.update()
+    manifest = _manifest(context)
+    settings = context.scene.ocf_settings
+    objects = {o.get("ocf_piece_id"): o for o in _artwork_objects(context)}
+    usable_x = settings.printer_bed_x - 2 * settings.printer_margin
+    usable_y = settings.printer_bed_y - 2 * settings.printer_margin
+    if min(usable_x, usable_y) <= 0:
+        raise ValueError("Bed margin leaves no usable print area")
+    for p in manifest["pieces"]:
+        obj = objects.get(p["piece_id"])
+        expected_location = (p["artwork_x_mm"] - manifest["width"] / 2,
+                             p["artwork_y_mm"] - manifest["height"] / 2, 0)
+        if (obj is None or obj.modifiers or obj.parent
+                or any(abs(obj.matrix_world[i][j] - (1.0 if i == j else 0.0)) > 1e-5
+                       for i in range(3) for j in range(3))
+                or any(abs(obj.matrix_world[i][3] - expected_location[i]) > 0.002
+                       for i in range(3))
+                or obj.get("ocf_mesh_signature") != _mesh_fingerprint(obj.data)):
+            raise ValueError(f'{p["piece_id"]} was edited; regenerate to synchronize geometry and map')
+        if p["bounds_max"][2] - p["bounds_min"][2] > settings.printer_bed_z:
+            raise ValueError(f'{p["piece_id"]} exceeds the configured print height')
+    plates = _pack_plates(manifest["pieces"], usable_x, usable_y, settings.batch_spacing)
+    destination = Path(directory)
+    destination.mkdir(parents=True, exist_ok=True)
+    # Unique destination on every export; existing print jobs are never replaced.
+    package = Path(tempfile.mkdtemp(prefix=f'OrganicCups_seed{manifest["seed"]}_', dir=destination))
+    (package / "pieces").mkdir()
+    (package / "plates").mkdir()
+    (package / "regions").mkdir()
+    (package / "assembly.csv").write_text(_assembly_csv(manifest["pieces"]), encoding="utf-8")
+    (package / "assembly.svg").write_text(_svg_map(manifest), encoding="utf-8")
+    for row in range(manifest["rows"]):
+        for column in range(manifest["columns"]):
+            number = row * manifest["columns"] + column + 1
+            (package / "regions" / f"P{number:02d}.svg").write_text(
+                _svg_map(manifest, column, row), encoding="utf-8",
+            )
+    for p in manifest["pieces"]:
+        low, high = p["bounds_min"], p["bounds_max"]
+        offset = (-(low[0] + high[0]) / 2, -(low[1] + high[1]) / 2, -low[2])
+        _write_stl(package / "pieces" / f'{p["piece_id"]}.stl',
+                   [(objects[p["piece_id"]], offset)])
+    plate_manifest = []
+    margin = settings.printer_margin
+    for index, plate in enumerate(plates, 1):
+        items, assignments = [], []
+        svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{settings.printer_bed_x}mm" '
+               f'height="{settings.printer_bed_y}mm" '
+               f'viewBox="0 0 {settings.printer_bed_x} {settings.printer_bed_y}">',
+               '<rect width="100%" height="100%" fill="white"/>']
+        for p, x, y in plate["pieces"]:
+            low, high = p["bounds_min"], p["bounds_max"]
+            offset = (x + margin - low[0], y + margin - low[1], -low[2])
+            items.append((objects[p["piece_id"]], offset))
+            assignments.append(dict(piece_id=p["piece_id"], offset=list(offset)))
+            w, h = high[0] - low[0], high[1] - low[1]
+            sy = settings.printer_bed_y - (y + margin + h)
+            svg.append(f'<rect x="{x+margin}" y="{sy}" width="{w}" height="{h}" '
+                       'fill="#eee" stroke="#555" stroke-width=".2"/>')
+            svg.append(f'<text x="{x+margin+w/2}" y="{sy+h/2}" font-size="3" '
+                       f'text-anchor="middle">{p["piece_id"]}</text>')
+        svg.append('</svg>')
+        filename = f"plate_{index:03d}"
+        _write_stl(package / "plates" / f"{filename}.stl", items)
+        (package / "plates" / f"{filename}.svg").write_text("\n".join(svg), encoding="utf-8")
+        plate_manifest.append(dict(plate=filename, pieces=assignments))
+    manifest["print_plates"] = plate_manifest
+    manifest["export_printer"] = dict(x=settings.printer_bed_x, y=settings.printer_bed_y,
+                                     z=settings.printer_bed_z, margin=margin,
+                                     spacing=settings.batch_spacing)
+    (package / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (package / "PRINT_ME_FIRST.md").write_text(
+        "# Your Organic Cups print package\n\n"
+        "All STL coordinates are millimetres. Import one plates/plate_*.stl at a time "
+        "into Bambu Studio, keeping its parts together and their layout unchanged. "
+        "Use the matching plate SVG to label pieces as they come off the bed. "
+        "The individual pieces/ files are for reprints.\n\n"
+        "The SVG mounting maps use true millimetre dimensions: print at 100%, not "
+        "fit-to-page, and measure the 20 mm ruler. Convert or tile the master SVG "
+        "in a vector editor if it exceeds your paper size. Dashed contours mark "
+        "glue feet; faint solid contours mark mouths. Coordinates start at bottom-left. "
+        "The small orientation line points along the shape's local X direction; "
+        "STL geometry already includes that rotation. Colour groups are suggestions.\n\n"
+        "Bed margin and spacing do not include slicer-added brims. Check them in "
+        "layer preview. Print a few representative forms before the complete set. "
+        "Regions organize assembly; cups can cross seams. Join the backing first. "
+        "Do not rescale pieces independently.\n", encoding="utf-8",
+    )
+    return package, len(plates)
+
+
+class OCF_OT_frame_artwork(Operator):
+    bl_idname = "ocf.frame_artwork"
+    bl_label = "Frame All Panels"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        objects = _artwork_objects(context)
+        if not objects:
+            self.report({"ERROR"}, "Generate artwork first")
+            return {"CANCELLED"}
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        for obj in objects:
+            obj.hide_set(False)
+            obj.select_set(True)
+        context.view_layer.objects.active = objects[0]
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                region = next(r for r in area.regions if r.type == "WINDOW")
+                with context.temp_override(area=area, region=region):
+                    bpy.ops.view3d.view_selected(use_all_regions=False)
+                area.spaces.active.clip_end = 100000
+                break
+        return {"FINISHED"}
+
+
+def _setup_render(context):
+    from mathutils import Vector
+    objects = _artwork_objects(context)
+    if not objects:
+        raise ValueError("Generate artwork first")
+    context.view_layer.update()
+    settings = context.scene.ocf_settings
+    points = [obj.matrix_world @ Vector(corner) for obj in objects for corner in obj.bound_box]
+    low, high = _vertex_bounds(points)
+    center = Vector([(low[i] + high[i]) / 2 for i in range(3)])
+    span = max(high[i] - low[i] for i in range(3))
+    preview = bpy.data.scenes.get(context.scene.get("ocf_preview_scene", ""))
+    if preview is None or not preview.get("ocf_render_scene"):
+        preview = bpy.data.scenes.new("OCF Artwork Preview")
+        preview["ocf_render_scene"] = True
+        context.scene["ocf_preview_scene"] = preview.name
+    for obj in list(preview.objects):
+        if obj.get("ocf_render_helper"):
+            data = obj.data
+            bpy.data.objects.remove(obj, do_unlink=True)
+            if data.users == 0:
+                bpy.data.cameras.remove(data)
+        else:
+            preview.collection.objects.unlink(obj)
+    for obj in objects:
+        preview.collection.objects.link(obj)
+    camera_data = bpy.data.cameras.new("OCF Full Artwork Camera")
+    camera = bpy.data.objects.new("OCF Full Artwork Camera", camera_data)
+    camera["ocf_render_helper"] = True
+    preview.collection.objects.link(camera)
+    direction = Vector((0, 0, 1) if settings.render_view == "TOP" else (0.28, -0.52, 1)).normalized()
+    camera.location = center + direction * (span * 3 + 100)
+    camera.rotation_euler = (-direction).to_track_quat("-Z", "Y").to_euler()
+    inverse_rotation = camera.rotation_euler.to_quaternion().inverted()
+    projected = [inverse_rotation @ (p - center) for p in points]
+    width = max(abs(p.x) for p in projected) * 2
+    height = max(abs(p.y) for p in projected) * 2
+    width, height = max(width, 1), max(height, 1)
+    aspect = width / height
+    size = settings.render_pixels
+    preview.render.resolution_x = max(64, round(size * min(1, aspect)))
+    preview.render.resolution_y = max(64, round(size * min(1, 1 / aspect)))
+    preview.render.resolution_percentage = 100
+    preview.render.pixel_aspect_x = preview.render.pixel_aspect_y = 1
+    camera_data.type = "ORTHO"
+    camera_data.sensor_fit = "HORIZONTAL"
+    actual_aspect = preview.render.resolution_x / preview.render.resolution_y
+    camera_data.ortho_scale = max(width, height * actual_aspect) * 1.12
+    camera_data.clip_start = 0.01
+    camera_data.clip_end = span * 10 + 1000
+    preview.camera = camera
+    # A dedicated studio-render scene leaves user camera/lighting/engine intact.
+    preview.render.engine = "BLENDER_WORKBENCH"
+    preview.display.shading.light = "STUDIO"
+    preview.display.shading.color_type = "MATERIAL"
+    preview.display.shading.show_shadows = True
+    preview.display.shading.show_cavity = False
+    preview.display.shading.cavity_type = "BOTH"
+    preview.display.shading.background_type = "WORLD"
+    preview.world = bpy.data.worlds.get("OCF Preview World") or bpy.data.worlds.new("OCF Preview World")
+    preview.world.color = (0.05, 0.05, 0.05)
+    preview.render.image_settings.file_format = "PNG"
+    preview.unit_settings.system = "METRIC"
+    preview.unit_settings.scale_length = 0.001
+    preview.view_layers[0].update()
+    return preview
+
+
+class OCF_OT_setup_render(Operator):
+    bl_idname = "ocf.setup_render"
+    bl_label = "Set Up Full Artwork Camera"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        try:
+            scene = _setup_render(context)
+            self.report({"INFO"}, f"Camera ready in scene: {scene.name}; use Render All Panels")
+            return {"FINISHED"}
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+
+class OCF_OT_render_artwork(Operator):
+    bl_idname = "ocf.render_artwork"
+    bl_label = "Render All Panels"
+    bl_description = "Fit all generated panels to a separate studio scene and render an image"
+
+    def execute(self, context):
+        try:
+            scene = _setup_render(context)
+            if bpy.app.background:
+                bpy.ops.render.render(scene=scene.name)
+            else:
+                bpy.ops.render.render("INVOKE_DEFAULT", scene=scene.name)
+            return {"FINISHED"}
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+
+class OCF_OT_export_package(Operator):
+    bl_idname = "ocf.export_package"
+    bl_label = "Export Print & Assembly Package"
+    bl_description = "Save individual STLs, spaced print plates, numbered SVG maps and settings"
+    directory: StringProperty(subtype="DIR_PATH")
+    filter_folder: BoolProperty(default=True, options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        try:
+            if not self.directory:
+                raise ValueError("Choose an output folder")
+            package, plates = _export_print_package(context, bpy.path.abspath(self.directory))
+            self.report({"INFO"}, f"Exported {plates} plates and maps to {package}")
+            return {"FINISHED"}
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+
 class OCF_PT_sidebar(Panel):
     bl_label = "Organic Cup Field"
     bl_idname = "OCF_PT_sidebar"
@@ -2981,6 +3391,13 @@ class OCF_PT_sidebar(Panel):
         layout = self.layout
         settings = context.scene.ocf_settings
 
+        view_box = layout.box()
+        view_box.label(text="View & Render", icon="CAMERA_DATA")
+        view_box.operator("ocf.frame_artwork", icon="VIEWZOOM")
+        view_box.prop(settings, "render_view")
+        view_box.prop(settings, "render_pixels")
+        view_box.operator("ocf.render_artwork", icon="RENDER_STILL")
+        view_box.label(text="Save image from Render Result > Image", icon="INFO")
         plan_box = layout.box()
         plan_box.label(text="Finished Work / A1 Mini", icon="FULLSCREEN_ENTER")
         plan_box.prop(settings, "style_preset")
@@ -3132,6 +3549,8 @@ class OCF_PT_sidebar(Panel):
         if settings.output_mode == "NUMBERED_PIECES":
             output_box.separator()
             output_box.label(text="Assembly Map", icon="TEXT")
+            output_box.prop(settings, "batch_spacing")
+            output_box.operator("ocf.export_package", icon="EXPORT")
             output_box.prop(settings, "assembly_csv_path")
             output_box.operator(
                 "ocf.export_assembly_csv",
@@ -3163,6 +3582,10 @@ CLASSES = (
     OCF_OT_generate_modular_artwork,
     OCF_OT_export_assembly_csv,
     OCF_OT_generate_finished_work,
+    OCF_OT_frame_artwork,
+    OCF_OT_setup_render,
+    OCF_OT_render_artwork,
+    OCF_OT_export_package,
     OCF_PT_sidebar,
 )
 

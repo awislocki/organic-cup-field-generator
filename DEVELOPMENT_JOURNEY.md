@@ -332,3 +332,42 @@ Version 1.7.0 is the first release that treats the wall piece as one master
 composition and the printer-sized divisions as a downstream assembly system.
 That architectural change is the most important step in moving from a field of
 random cups toward the intended flowing, tightly packed coral artwork.
+
+## 16. Review and production workflow improvements — version 1.8
+
+On 2026-09-06, a further review focused on whether the modular architecture worked
+at full artwork scale and could carry the user through rendering and printing.
+This section updates the historical account above; earlier sections describe
+the behavior and limitations at the time of version 1.7.
+
+The review found that the 1.7 master path assigned finished dimensions back into
+the tile controls. Those controls had a 1,000 mm maximum, so a 1,200 mm artwork
+could be truncated even though its assembly metadata still described the larger
+size. Version 1.8 uses an independent numeric settings snapshot. Tests now require
+generated piece centres near both ends of the complete 600 × 1200 mm artwork.
+
+The foot/body overlap was also replaced with directly connected rings. Each
+modular cup is now one closed connected surface. Its flat underside, tapered foot
+shoulder and cup body share vertices and edges. Optional remeshing remains available,
+but is no longer needed merely to unite two overlapping parts of a cup.
+
+The user's question about rendering every panel exposed another practical gap.
+Version 1.8 adds automatic framing and a separate studio scene whose camera fits
+all generated geometry. Straight-on and angled views are both checked against every
+piece's bounding-box corners. Existing cameras and lights remain in the source scene.
+
+The coordinate table became a complete assembly package: numbered full-scale SVG
+maps show roots, mouth outlines and orientation, while individual STL files and
+spaced print-plate STLs carry the same IDs. Plate diagrams identify pieces after
+printing. A settings manifest records the exact generated job, and export rejects
+geometry edits that would invalidate that mounting map. IDs are not engraved.
+
+Regeneration now stages modular work before replacing the previous successful
+result. A deliberate injected failure in the regression test verifies that the
+old geometry and placement data survive. Tests also check connected topology,
+actual exported STL dimensions, plate clearances and both portrait/landscape cameras.
+
+These changes move the project beyond a composition preview into a repeatable
+render, print and assembly workflow. Conservative packing and support/overhang
+inspection remain explicit practical limits; see CHANGELOG.md and the operating
+guide for the current behavior.

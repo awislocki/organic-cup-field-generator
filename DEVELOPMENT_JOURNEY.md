@@ -371,3 +371,44 @@ These changes move the project beyond a composition preview into a repeatable
 render, print and assembly workflow. Conservative packing and support/overhang
 inspection remain explicit practical limits; see CHANGELOG.md and the operating
 guide for the current behavior.
+
+## 17. Flowing coral, not independently randomized cups — version 2.0
+
+On 2026-09-07 the user supplied a new close-up and explicitly welcomed starting
+fresh. The request emphasized a flowing coral reef and high quality with minimal
+printing material. The useful visual distinction was not simply more noise or
+more height variation: bands of small narrow cups wind around larger open forms,
+and direction, scale and relief reinforce one another.
+
+The existing local Python file had been deleted, while v1.8 remained safely
+checked in. Development therefore used that saved version as a reference and
+created a separately named add-on with a separate namespace. It preserved the
+local deletion and retained the established export, assembly and failure-safe
+generation infrastructure.
+
+The replacement composition uses the contours of one warped scalar stream
+function for both local size hierarchy and orientation. Placement is adaptive to
+that size field rather than distributing fairly uniform seeds and changing their
+radii afterward. A first render exposed polygonal mouths and conspicuous gaps.
+The next iteration replaced hard boundary minima with smooth blends of all cell
+constraints, then added a distance-to-footprint gap pass. This inserts genuinely
+small forms without shrinking the already composed focal cups.
+
+Material efficiency required a modeling change too. The older cup interpolated
+its inner funnel independently of its bulging outer body, which could leave
+substantial solid wedges. Version 2.0 offsets a single outer surface along its
+normals to derive the inside. The glue transition and rim remain deliberately
+reinforced. The UI reports solid geometry volume and an explicitly assumed-density
+mass estimate; it does not pretend to predict supports, brims or exact slicing.
+
+Four reef presets separate the reference-oriented, lower-relief, deeper and
+stronger-current directions. All recommended reef workflows generate the complete
+composition once, then assign cups to assembly regions and export them on spaced
+A1 Mini print plates. A studio-only backing gives the renders a wall-art context
+without silently adding a printed slab to the job.
+
+The preview is rendered from actual meshes in Blender. Regression tests cover
+the inherited export and assembly behavior plus normal offsets, deterministic
+composition, stream tangency and representative intersection/containment checks.
+Physical FDM trials remain outstanding; thin overhangs, small glue feet and
+fragile rims require sample prints before committing to the full artwork.

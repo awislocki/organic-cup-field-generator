@@ -1,5 +1,21 @@
 # Organic Cup Field Generator
 
+## New: Flowing Coral Reef 2.0
+
+The latest reference-oriented generator is
+[`flowing_coral_reef_generator.py`](flowing_coral_reef_generator.py).
+It introduces shared-stream size/orientation bands, softly molded mouths,
+geometric gap filling, nominal normal-offset thin shells, low-material presets
+and soft studio rendering. It retains the numbered A1 Mini print/assembly workflow.
+
+Start with the [Flowing Reef installation and printing guide](README_flowing_coral_reef.md).
+
+![Actual Blender render of the new reef](docs/flowing_reef_top.png)
+
+The content below describes the previous Organic Cup v1.8 add-on, which remains
+available independently in Git history and the repository. Its old sidebar and
+controls do not configure the new **Coral Reef** add-on.
+
 A Blender 4.x add-on for generating large wall artworks made from tightly packed,
 hollow organic cups. The forms combine tulip, calla-lily, coral, and teardrop
 characteristics with a coherent height wave and downward undercurrent.

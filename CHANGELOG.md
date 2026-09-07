@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.0.0 — 2026-09-07 — Flowing Coral Reef
+
+- Separate `flowing_coral_reef_generator.py` add-on and `crf` namespace; the missing
+  local v1.8 file was not restored or overwritten.
+- Rebuilt the composition around one stream function shared by size bands and
+  orientation. Adaptive seed placement preserves room for larger focal funnels.
+- Smoothly blended cell constraints avoid sharp clipped-mouth corners. A planar
+  footprint-distance pass inserts small cups into remaining gaps.
+- Rebuilt cup hollowing as nominal surface-normal offsets, with a rounded lip,
+  closed floor and connected flat glue foot. No shared backing in the recommended
+  workflow, no mandatory voxel merge, no independently interpolated thick cavity.
+- Model volume and explicitly assumed-density mass estimate in the sidebar;
+  per-piece volume and full-job volume in the manifest.
+- Flowing Reef, Low-Material Reef, Sculptural Reef and Tidal Ribbons presets.
+- Separate soft Cycles studio scene and display-only backing; optional fast preview.
+- New operating guide, real rendered examples and expanded Blender regression.
+- Numbered generation runs a mesh preflight and rejects folded offset shells,
+  retaining the last successful artwork when settings are geometrically invalid.
+
+The default A1 Mini footprint remains 175 × 175 mm within a 180 mm bed. Brims,
+supports, actual extrusion widths and physical print quality still need slicer
+review and representative test prints; this release does not claim a guaranteed
+support-free or minimum-mass optimum.
+
+Blender 4.1.1 full-artwork regression: 1,429 pieces across 600 × 1200 mm,
+28 spaced print batches at 3 mm spacing. Every piece passed closed/connected
+topology, winding, positive-volume and non-adjacent self-intersection checks.
+The dedicated 79-piece kernel case also passed nominal-offset, convex-cell
+containment, deterministic-seed and shared-stream tangent tests. All six presets
+passed small-scene geometry checks. These are geometric tests, not physical prints.
+
+The workflow also passed on Blender 5.2.1 LTS. A reproducible preset measurement
+at 600 × 450 mm yielded 365.12 cm³ for Flowing Reef and 328.33 cm³ for the final
+Low-Material Reef (505 pieces each), approximately 10% less solid model volume.
+
 ## 1.8.0 — 2026-09-06
 
 ### Correctness

@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "blender": "4.1.1",
+  "results": [
+    {
+      "preset": "PARAGAMI_CORAL",
+      "width_mm": 600.0,
+      "height_mm": 450.0,
+      "seed": 240531,
+      "pieces": 505,
+      "model_volume_cm3": 365.12,
+      "assumed_mass_g": 452.7
+    },
+    {
+      "preset": "DENSE_MOSAIC",
+      "width_mm": 600.0,
+      "height_mm": 450.0,
+      "seed": 240531,
+      "pieces": 505,
+      "model_volume_cm3": 328.33,
+      "assumed_mass_g": 407.1
+    }
+  ],
+  "note": "Different compositions/presets at the same size and seed. Mass assumes 1.24 g/cm3. Excludes supports, brims, purge and slicer line-width effects; not a physical test."
+}
